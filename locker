@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+
+set -o pipefail
+
+LOCKER_VERSION_MAJ=0
+LOCKER_VERSION_MIN=1
+LOCKER_VERSION_REV=0
+
+LOCKER_KEYFILE="locker-key"
+LOCKER_SECRET_SUFFIX=".locker-secret"
+LOCKER_ENC_ITERATIONS=1001
+
+LOCKER_TMP=/dev/shm
+if [[ -d /run/shm ]]; then
+    LOCKER_TMP=/run/shm
+fi
+
+if [[ ! -d $LOCKER_TMP ]]; then
+    LOCKER_TMP=/tmp
+fi
+
+: ${LOCKER_HOME:="$HOME/.locker"}
+: ${LOCKER_DB:="$HOME/.locker-db"}
+
+addkeeper() {
+    grep "$1" $LOCKER_DB/keepers >/dev/null && {
+        echo "Keeper already exists" >&2
+        return 1
+    }
+    echo "$1 $2" >> $LOCKER_DB/keepers
+}
+
+keygen() {
+    local _pkeypass
+    local _pkeypasscheck
+
+    [[ ! -f $LOCKER_HOME/$LOCKER_KEYFILE ]] || {
+        echo "Key already exists in $LOCKER_HOME" >&2
+        return 1
+    }
+
+    read -sp "Pick a password for your private key: " _pkeypass
+    echo
+    read -sp "Confirm your password: " _pkeypasscheck
+    echo
+
+    if [[ $_pkeypass != $_pkeypasscheck ]]; then
+        echo "Passwords don't match!" 1>&2
+        return 1
+    fi
+
+    [[ -d $LOCKER_HOME ]] || mkdir -p $LOCKER_HOME
+
+    openssl genrsa \
+        -aes256 \
+        -out $LOCKER_HOME/$LOCKER_KEYFILE \
+        -passout "pass:$_pkeypass" 
+
+    chmod 0600 $LOCKER_HOME/$LOCKER_KEYFILE
+
+    openssl pkey \
+        -in $LOCKER_HOME/$LOCKER_KEYFILE \
+        -pubout \
+        -outform DER \
+        -passin "pass:$_pkeypass" | base64 -w0 > $LOCKER_HOME/$LOCKER_KEYFILE.pub
+}
+
+initdb() {
+    local _key
+    local _enc
+    local _pubkey
+
+    [[ -d $LOCKER_DB ]] || {
+        mkdir -p $LOCKER_DB
+        chmod 0700 $LOCKER_DB
+    }
+
+    [[ ! -f $LOCKER_DB/keepers ]] || {
+        echo "Locker $LOCKER_DB is already initialized" >&2
+        return 1
+    }
+
+    _key=$(dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 -w0)
+
+    _enc=$(echo $_key | \
+        openssl rsautl \
+        -encrypt \
+        -pubin \
+        -keyform DER \
+        -inkey <(base64 -d $LOCKER_HOME/$LOCKER_KEYFILE.pub) \
+        | base64 -w0) || return $?
+
+    _pubkey=$(cat $LOCKER_HOME/$LOCKER_KEYFILE.pub)
+
+    addkeeper $_pubkey $_enc || return $?
+
+    echo "Database created at $LOCKER_DB/" >&2
+}
+
+getdbencryptionkey() {
+    local _pubkey
+    local _encrypted
+
+    _pubkey=$(cat $LOCKER_HOME/$LOCKER_KEYFILE.pub)
+    _encrypted=$(awk -v "val=$_pubkey" '$1 == val { print $2; nextfile }' $LOCKER_DB/keepers)
+
+    if [[ "x$_encrypted" == "x" ]]; then
+        echo "You're not a keeper for $LOCKER_DB" >&2
+        return 1
+    fi
+
+    openssl rsautl \
+        -decrypt \
+        -inkey $LOCKER_HOME/$LOCKER_KEYFILE \
+        -in <(echo $_encrypted | base64 -d -w0)
+}
+
+addsecret() {
+    local _encryptionkey
+    local _mask
+    local _tmp
+    local _ret
+
+    [[ -f $LOCKER_DB/keepers ]] || {
+        echo "Locker doesn't exist: $LOCKER_DB/" >&2
+        return 1
+    }
+
+    [[ ! -f "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX" ]] || {
+        echo "Secret already exists: $1" >&2
+        return 1
+    }
+
+    [[ -d $(dirname "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX") ]] || {
+        mkdir -p $(dirname "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX")
+    }
+
+    _encryptionkey=$(getdbencryptionkey)
+    [[ $? -eq 0 ]] || {
+        echo "Couldn't get locker encryption key" >&2
+        return 1
+    }
+    
+    _mask=$(umask)
+    umask 077
+    _tmp=$(mktemp -p $LOCKER_TMP)
+    umask $_mask
+    echo "Enter the secret's contents. Ctrl+D to finish" >&2
+    cat >$_tmp
+
+    openssl enc \
+        -aes-256-cbc \
+        -a \
+        -iter $LOCKER_ENC_ITERATIONS \
+        -in $_tmp \
+        -pass pass:$_encryptionkey \
+        -out "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX"
+
+    _ret=$?
+    shred -u $_tmp
+
+    return $_ret
+}
+
+getsecret() {
+    [[ -f "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX" ]] || {
+        echo "Secret doesn't exist in $LOCKER_DB/: $1" >&2
+        return 1
+    }
+
+    _encryptionkey=$(getdbencryptionkey)
+    [[ $? -eq 0 ]] || {
+        echo "Couldn't get locker encryption key" >&2
+        return 1
+    }
+    
+    openssl enc \
+        -aes-256-cbc \
+        -d \
+        -a \
+        -iter $LOCKER_ENC_ITERATIONS \
+        -in "$LOCKER_DB/$1$LOCKER_SECRET_SUFFIX" \
+        -pass pass:$_encryptionkey
+}
+
+listsecrets() {
+    if [[ -z $1 ]]; then
+        find $LOCKER_DB \
+            -type f \
+            -name *$LOCKER_SECRET_SUFFIX \
+            -printf "%P\n" \
+            | sed 's/'"$LOCKER_SECRET_SUFFIX"'//g'
+    else
+        find $LOCKER_DB \
+            -type f \
+            -name *$LOCKER_SECRET_SUFFIX \
+            -printf "%P\n" \
+            | sed 's/'"$LOCKER_SECRET_SUFFIX"'//g' \
+            | grep $1
+    fi
+}
+
+addnewkeeper() {
+    local _enc _otherenc _otherkey
+
+    _otherkey=$(cat)
+    _enc=$(getdbencryptionkey) || return
+    _otherenc=$(echo $_enc | \
+        openssl rsautl \
+        -encrypt \
+        -pubin \
+        -keyform DER \
+        -inkey <(echo $_otherkey | base64 -d) \
+        | base64 -w0) || return
+
+    addkeeper $_otherkey $_otherenc
+}
+
+showpubkey() {
+    cat "$LOCKER_HOME/$LOCKER_KEYFILE.pub"
+}
+
+printusage() {
+    cat >&2 <<EOF
+Usage: 
+    $(basename $0) 
+    $(basename $0) <COMMAND> [ ARGS... ]
+
+COMMANDS:
+  init              - Initializes \$LOCKER_HOME with a new key pair.
+  newdb             - Creates a new locker at \$LOCKER_DB.
+  add <NAME>        - Adds a new secret called <NAME> to the locker.
+  get <NAME>        - Decrypts the secret <NAME> from the locker.
+  find [<PATTERN>]  - Searches the locker for a secret matching
+                      <PATTERN>. If this is not provided then
+                      all secrets will be listed.
+  addkeeper         - Adds another user's public key to the locker,
+                      granting them access to the secrets. The public 
+                      key must be supplied on STDIN.
+  pubkey            - Print your public key to STDOUT.
+  version           - Print Locker version.
+  help              - Show this help message.
+
+EOF
+}
+
+printversion() {
+    echo -n $(basename $0)
+    echo " $LOCKER_VERSION_MAJ.$LOCKER_VERSION_MIN.$LOCKER_VERSION_REV" >&2
+}
+
+_cmd=$1
+shift
+case $_cmd in
+    "init")
+        keygen $@
+        ;;
+    "newdb")
+        initdb $@
+        ;;
+    "add")
+        addsecret $@
+        ;;
+    "get")
+        getsecret $@
+        ;;
+    "find"|"")
+        listsecrets $@
+        ;;
+    "pubkey")
+        showpubkey $@
+        ;;
+    "help")
+        printusage
+        ;;
+    "version")
+        printversion
+        ;;
+    "addkeeper")
+        addnewkeeper $@
+        ;;
+    *)
+        echo "Unknown command: $_cmd" >&2
+        printusage
+        exit 1
+        ;;
+esac
