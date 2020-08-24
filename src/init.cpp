@@ -47,13 +47,6 @@ using EVP_PKEY_CTXPtr = std::unique_ptr<EVP_PKEY_CTX, EVP_PKEY_CTXDeleter>;
 using EVP_PKEYPtr = std::unique_ptr<EVP_PKEY, EVP_PKEYDeleter>;
 using FILEPtr = std::unique_ptr<FILE, FILEDeleter>;
 
-template<typename F>
-auto password_callback_proxy(char* buffer, int size, int rwflag, void* u) -> int
-{
-    F& f = *reinterpret_cast<F*>(u);
-    return f(buffer, size, rwflag);
-}
-
 auto generate_random_data(locker::Span<unsigned char> output) -> void
 {
     std::ifstream urandom { "/dev/urandom", std::ios::binary };
@@ -155,8 +148,8 @@ auto locker::detail::init_key_impl(
 
     EVP_PKEYPtr pkey { key };
 
-    auto callback = [&](char* buffer, int size, int /*rwflag*/) -> int {
-        auto pass = cb(f);
+    auto callback = [&](char* buffer, int size, int rwflag) -> int {
+        auto pass = cb(f, rwflag == 1);
 
         if (!size)
             return -1;
@@ -172,14 +165,22 @@ auto locker::detail::init_key_impl(
     if (!output_file)
         throw std::runtime_error { "Error: fopen - locker-key" };
 
-    auto success = PEM_write_PrivateKey(
-            output_file.get(),
-            pkey.get(),
-            EVP_aes_256_cbc(),
-            nullptr,
-            0,
-            &password_callback_proxy<decltype(callback)>,
-            &callback);
+    int success;
+    try {
+        success = PEM_write_PrivateKey(
+                output_file.get(),
+                pkey.get(),
+                EVP_aes_256_cbc(),
+                nullptr,
+                0,
+                &password_callback_proxy<decltype(callback)>,
+                &callback);
+    }
+    catch (...) {
+        for (auto& e : fs::directory_iterator { dir })
+            fs::remove(e);
+        throw;
+    }
 
     if (success <= 0)
         throw std::runtime_error { "Error: PEM_write_PrivateKey" };

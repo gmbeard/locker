@@ -10,7 +10,7 @@
 namespace locker
 {
 
-using PwdCallback = auto (*)(void*) -> std::string;
+using PwdCallback = auto (*)(void*, bool verify) -> std::string;
 
 struct EVP_PKEYDeleter
 {
@@ -23,10 +23,10 @@ namespace detail
 {
 
 template<typename F>
-auto pwd(void* data) -> std::string
+auto pwd(void* data, bool verify) -> std::string
 {
     F& f = *reinterpret_cast<F*>(data);
-    return f();
+    return f(verify);
 }
 
 template<typename F>

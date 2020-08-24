@@ -57,7 +57,7 @@ auto encrypt(locker::Span<char const*> args) -> int
             db_path(),
             key_path(),
             { &plain_text[0], plain_text.size() },
-            [] {
+            [](bool) {
                 auto pwd = locker::read_password_from_terminal("Enter locker password: ");
                 locker::write_terminal("\n");
                 return pwd;
@@ -82,7 +82,7 @@ auto decrypt(locker::Span<char const*> args) -> int
             db_path(),
             key_path(),
             { &encrypted_text[0], encrypted_text.size() },
-            [] {
+            [](bool) {
                 auto pwd = locker::read_password_from_terminal("Enter locker password: ");
                 locker::write_terminal("\n");
                 return pwd;
@@ -106,6 +106,38 @@ auto list() -> int
     }
 
     return 0;
+}
+
+auto init_key() -> void
+{
+    locker::init_key(
+        key_path(),
+        [](bool verify) {
+            auto pwd = locker::read_password_from_terminal("Enter locker password: ");
+            bool ok = true;
+            if (verify)
+                ok = pwd == locker::read_password_from_terminal("\nRe-type your password: ");
+                
+            locker::write_terminal("\n");
+            if (!ok)
+                throw std::runtime_error { "Passwords don't match" };
+
+            return pwd;
+        }
+    );
+}
+
+auto init_db() -> void
+{
+    locker::init_db(
+        db_path(),
+        key_path(),
+        [](bool) {
+            auto pwd = locker::read_password_from_terminal("Enter locker password: ");
+            locker::write_terminal("\n");
+            return pwd;
+        }
+    );
 }
 
 auto main(int argc, char const** argv) -> int
@@ -132,6 +164,10 @@ auto main(int argc, char const** argv) -> int
                 args.data() + 1,
                 safe_cast<std::size_t>(args.size() -1 )
             });
+        else if (std::strcmp(args[0], "init-key") == 0)
+            init_key();
+        else if (std::strcmp(args[0], "init-db") == 0)
+            init_db();
         else
             return die("Unknown command: "s + args[0]);
     }

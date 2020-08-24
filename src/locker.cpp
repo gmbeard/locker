@@ -65,7 +65,7 @@ auto locker::detail::encrypt_impl(
 
     auto decrypted_key = pk_decrypt(
         { &raw_encrypted_key[0], raw_encrypted_key.size() },
-        load_private_key(key_path, [&] { return cb(user_data); })
+        load_private_key(key_path, [&](bool verify) { return cb(user_data, verify); })
     );
 
     return symmetric_encrypt(
@@ -99,7 +99,7 @@ auto locker::detail::decrypt_impl(
 
     auto decrypted_key = pk_decrypt(
         { &raw_encrypted_key[0], raw_encrypted_key.size() },
-        load_private_key(key_path, [&] { return cb(user_data); })
+        load_private_key(key_path, [&](bool verify) { return cb(user_data, verify); })
     );
 
     return symmetric_decrypt(

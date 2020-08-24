@@ -11,7 +11,7 @@ McTest(should_initialize)
     if (fs::exists(kTmpPath))
         fs::remove_all(kTmpPath);
 
-    locker::init_key(kTmpPath, [] { return "Hello"; });
+    locker::init_key(kTmpPath, [](bool) { return "Hello"; });
 
     Expect(fs::exists(kTmpPath));
     Expect(fs::exists(fs::path(kTmpPath) / "locker-key"));
@@ -24,10 +24,10 @@ McTest(should_fail_to_initialize_if_dir_exists)
     if (fs::exists(kTmpPath))
         fs::remove_all(kTmpPath);
 
-    locker::init_key(kTmpPath, [] { return "Hello"; });
+    locker::init_key(kTmpPath, [](bool) { return "Hello"; });
 
     try {
-        locker::init_key(kTmpPath, [] { return "Hello"; });
+        locker::init_key(kTmpPath, [](bool) { return "Hello"; });
         Expect(false && "Should have thrown!");
     }
     catch (...)
@@ -41,12 +41,12 @@ McTest(should_initialize_db)
 
     if (fs::exists(kTmpKeyPath))
         fs::remove_all(kTmpKeyPath);
-    locker::init_key(kTmpKeyPath, [] { return "Hello"; });
+    locker::init_key(kTmpKeyPath, [](bool) { return "Hello"; });
 
     if (fs::exists(kTmpDbPath))
         fs::remove_all(kTmpDbPath);
 
-    locker::init_db(kTmpDbPath, kTmpKeyPath, [] { return "Hello"; });
+    locker::init_db(kTmpDbPath, kTmpKeyPath, [](bool) { return "Hello"; });
 
     Expect(fs::exists(kTmpDbPath));
     Expect(fs::exists(fs::path(kTmpDbPath) / "keepers"));

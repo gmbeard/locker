@@ -19,7 +19,7 @@ McTest(should_encrypt_data)
             reinterpret_cast<unsigned char const*>(kPlainText), 
             std::size(kPlainText) - 1 
         },
-        [] { return "Hello"; }
+        [](bool) { return "Hello"; }
     );
 }
 
@@ -36,14 +36,14 @@ McTest(should_decrypt_data)
             reinterpret_cast<unsigned char const*>(kPlainText), 
             std::size(kPlainText) - 1 
         },
-        [] { return "Hello"; }
+        [](bool) { return "Hello"; }
     );
 
     auto dec = locker::decrypt(
         kDbPath,
         kKeyPath,
         { &enc[0], enc.size() },
-        [] { return "Hello"; }
+        [](bool) { return "Hello"; }
     );
 
     std::string decrypted_text {
@@ -63,7 +63,7 @@ McTest(should_fail_if_not_a_keeper)
     if (fs::exists(kKeyPath))
         fs::remove_all(kKeyPath);
 
-    locker::init_key(kKeyPath, [] { return "Hello!"; });
+    locker::init_key(kKeyPath, [](bool) { return "Hello!"; });
 
     auto encrypt_func = [&] {
         locker::encrypt(
@@ -73,7 +73,7 @@ McTest(should_fail_if_not_a_keeper)
                 reinterpret_cast<unsigned char const*>(kPlainText), 
                 std::size(kPlainText) - 1 
             },
-            [] { return "Hello"; }
+            [](bool) { return "Hello"; }
         );
     };
 

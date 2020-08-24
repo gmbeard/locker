@@ -77,8 +77,8 @@ auto load_key(
     if (!fp)
         throw std::runtime_error { "Error: fopen - "s + key_path.c_str() }; 
 
-    auto callback = [&](char* buffer, int size, int /*rwflag*/) -> int {
-        auto pass = cb(user_data);
+    auto callback = [&](char* buffer, int size, int rwflag) -> int {
+        auto pass = cb(user_data, rwflag == 1);
 
         if (!size)
             return -1;
